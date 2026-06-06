@@ -9,6 +9,8 @@ provider through the `Provider` interface below.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 
+import requests
+
 
 class Provider(ABC):
     """A single LLM endpoint the engine can call.
@@ -36,7 +38,8 @@ class AnthropicProvider(Provider):
     x-api-key / anthropic-version / content-type. JSON is constrained via the
     system instruction plus the assistant `prefill` brace.
 
-    NOTE: implementation stubbed (RED) — driven to GREEN against the test suite.
+    The API key is injected at construction (the caller sources it, e.g. from
+    os.environ["ANTHROPIC_API_KEY"]) so the adapter stays testable.
     """
 
     name = "anthropic"
@@ -47,4 +50,29 @@ class AnthropicProvider(Provider):
         self.max_tokens = max_tokens
 
     def call(self, system: str, user: str, prefill: str = "{") -> str:
-        raise NotImplementedError
+        """Call the Messages API and return the raw completion text.
+
+        The assistant turn is prefilled with `prefill` (a '{') to force a JSON
+        object; the prefill is re-prepended to the response so the caller sees a
+        complete object. Raises requests.HTTPError on a non-2xx response.
+        """
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "system": system,
+                "messages": [
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": prefill},
+                ],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return prefill + data["content"][0]["text"]

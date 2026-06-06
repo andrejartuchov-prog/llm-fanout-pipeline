@@ -3,10 +3,11 @@
 Claude (and most chat LLMs) have no native `response_format` JSON mode, so the
 model output may contain prose, markdown ```json fences, or a leading assistant
 prefill brace. `extract_json` recovers the intended JSON object defensively.
-
-NOTE: implementation intentionally stubbed (RED). Driven to GREEN against the
-immutable test suite in tests/test_json_enforce.py.
 """
+from __future__ import annotations
+
+import json
+import re
 
 
 class JSONExtractError(ValueError):
@@ -20,4 +21,33 @@ def extract_json(text: str) -> dict:
     and an assistant-prefill leading '{'. Raises JSONExtractError if nothing
     parseable is found.
     """
-    raise NotImplementedError
+    stripped = text.strip()
+    if not stripped:
+        raise JSONExtractError("cannot extract JSON from empty text")
+
+    # Ordered candidates, cheapest first; the first that parses to a dict wins.
+    # A bare object parses directly; a fenced or prose-wrapped blob needs
+    # slicing; a prefilled completion has lost its opening brace.
+    candidates = [stripped]
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+
+    first, last = stripped.find("{"), stripped.rfind("}")
+    if 0 <= first < last:
+        candidates.append(stripped[first : last + 1])
+
+    if not stripped.startswith("{"):
+        # Assistant turn was prefilled with '{', so the completion dropped it.
+        candidates.append("{" + stripped)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise JSONExtractError(f"no valid JSON object found in: {text!r}")
