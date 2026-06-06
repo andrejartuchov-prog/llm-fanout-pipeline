@@ -49,12 +49,13 @@ class AnthropicProvider(Provider):
         self.model = model
         self.max_tokens = max_tokens
 
-    def call(self, system: str, user: str, prefill: str = "{") -> str:
+    def call(self, system: str, user: str, prefill: str = "{", *, timeout: float = 60.0) -> str:
         """Call the Messages API and return the raw completion text.
 
         The assistant turn is prefilled with `prefill` (a '{') to force a JSON
         object; the prefill is re-prepended to the response so the caller sees a
-        complete object. Raises requests.HTTPError on a non-2xx response.
+        complete object. Raises requests.HTTPError on a non-2xx response, or
+        ValueError if the response shape is unexpected.
         """
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -72,7 +73,12 @@ class AnthropicProvider(Provider):
                     {"role": "assistant", "content": prefill},
                 ],
             },
+            timeout=timeout,
         )
         response.raise_for_status()
         data = response.json()
-        return prefill + data["content"][0]["text"]
+        try:
+            text = data["content"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError(f"unexpected Anthropic response shape: {data!r}") from exc
+        return prefill + text
